@@ -310,7 +310,7 @@ function App() {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand-lockup">
-          <img className="company-logo" src="/mechpad%20sign.png" alt="MechPad" />
+          <img className="company-logo" src="/mechpad-sign.png" alt="MechPad" />
           <div className="muted">Aftersales & Supply Chain Management</div>
         </div>
       </header>
