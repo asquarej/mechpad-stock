@@ -278,7 +278,24 @@ function App() {
   const updateJobLine = (index, field, value) => {
     setJob((current) => ({
       ...current,
-      lines: current.lines.map((line, lineIndex) => lineIndex === index ? { ...line, [field]: value } : line)
+      lines: current.lines.map((line, lineIndex) => {
+        if (lineIndex !== index) return line;
+        if (field !== "ref" && field !== "name") return { ...line, [field]: value };
+
+        const query = value.trim().toLowerCase();
+        const matchingItems = data.stock
+          .filter((item) => allowedLocations.includes(item.location))
+          .sort((a, b) => Number(b.location === current.location) - Number(a.location === current.location));
+        const match = matchingItems.find((item) =>
+          field === "ref"
+            ? item.ref.toLowerCase() === query
+            : item.name.toLowerCase() === query
+        );
+
+        return match
+          ? { ...line, ref: match.ref, name: match.name, price: match.price }
+          : { ...line, [field]: value };
+      })
     }));
   };
 
@@ -383,13 +400,15 @@ function App() {
           <div className="section-head"><h3>Parts and engine oil</h3><button type="button" onClick={addJobLine}>＋ Add line</button></div>
           <p className="muted">Classify every line as Captain-paid or Company complimentary.</p>
           {job.lines.map((line, index) => <div className="job-line" key={index}>
-            <Field label="Reference"><input required value={line.ref} onChange={(e) => updateJobLine(index, "ref", e.target.value)} /></Field>
-            <Field label="Item / oil name"><input required value={line.name} onChange={(e) => updateJobLine(index, "name", e.target.value)} /></Field>
+            <Field label="Reference"><input required list="job-part-references" value={line.ref} onChange={(e) => updateJobLine(index, "ref", e.target.value)} /></Field>
+            <Field label="Item / oil name"><input required list="job-part-names" value={line.name} onChange={(e) => updateJobLine(index, "name", e.target.value)} /></Field>
             <Field label="Qty"><input required type="number" min="1" value={line.qty} onChange={(e) => updateJobLine(index, "qty", e.target.value)} /></Field>
             <Field label="Unit price"><input required type="number" min="0" value={line.price} onChange={(e) => updateJobLine(index, "price", e.target.value)} /></Field>
             <Field label="Payment"><select value={line.payment} onChange={(e) => updateJobLine(index, "payment", e.target.value)}>{PAYMENT_TYPES.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <button type="button" onClick={() => removeJobLine(index)}>Remove</button>
           </div>)}
+          <datalist id="job-part-references">{data.stock.filter((item) => allowedLocations.includes(item.location)).map((item) => <option key={item.ref} value={item.ref}>{item.name}</option>)}</datalist>
+          <datalist id="job-part-names">{data.stock.filter((item) => allowedLocations.includes(item.location)).map((item) => <option key={item.name} value={item.name}>{item.ref}</option>)}</datalist>
           <div className="notice">
             <div><b>Captain-paid:</b> {money(jobTotals.paid)}</div>
             <div><b>Company complimentary:</b> {money(jobTotals.free)}</div>
