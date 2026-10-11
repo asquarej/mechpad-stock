@@ -65,8 +65,9 @@ The production files will be generated in the `dist` folder.
 The app requires Supabase to enable logins and shared workspaces:
 
 1. Create a Supabase project and run `supabase/migrations/20261011140000_location_workspaces_auth.sql` in its SQL Editor.
-2. In Supabase Authentication, create one user for each location and any HQ users. Public self-registration is not used.
-3. Add one `public.profiles` row for every Auth user. The profile role must be one of `business_head`, `manager`, `finance`, `inventory_officer`, `workshop_officer`, or `technical_ops_lead`. City roles must have their exact location; HQ roles must have a null location. Profiles can be assigned in the Supabase SQL Editor, for example:
+2. In Supabase Authentication, create one user for each location and any HQ users. Public self-registration is not used. Use unique temporary passwords and share/store them only in an approved password manager; never commit passwords to this repository.
+3. For the approved test setup, create these nine Auth users: `adeoyeakanmu@gmail.com` (HQ Business Head) and `adeoyeakanmu+ibadan@gmail.com`, `+ilupeju@gmail.com`, `+kano@gmail.com`, `+abuja@gmail.com`, `+akure@gmail.com`, `+ilorin@gmail.com`, `+asaba@gmail.com`, `+ondo@gmail.com` (each location's Inventory Officer). Then run `supabase/seed_test_profiles.sql` in the SQL Editor to create the role/location profiles.
+4. Alternatively, add one `public.profiles` row for every Auth user. The profile role must be one of `business_head`, `manager`, `finance`, `inventory_officer`, `workshop_officer`, or `technical_ops_lead`. City roles must have their exact location; HQ roles must have a null location. Profiles can be assigned in the Supabase SQL Editor, for example:
 
    ```sql
    insert into public.profiles (id, display_name, role, location)
@@ -75,8 +76,8 @@ The app requires Supabase to enable logins and shared workspaces:
    where email = 'inventory-ibadan@example.com';
    ```
 
-4. In Vercel project settings, add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from the Supabase project API settings, then redeploy. These public client values are not secrets; never expose a Supabase service-role key in the browser or repository.
-5. Sign in with each provisioned account. Location officers are restricted to their assigned workspace by database row-level security; Business Head and Manager accounts can select any city from **Location workspace**.
+5. In Vercel project settings, add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from the Supabase project API settings, then redeploy. These public client values are not secrets; never expose a Supabase service-role key in the browser or repository.
+6. Sign in with each provisioned account. Location officers are restricted to their assigned workspace by database row-level security; Business Head and Manager accounts can select any city from **Location workspace**.
 
 The SQL migration creates all eight locations and enables row-level security. Authentication users and profiles are provisioned by the project administrator; do not share passwords in source control or chat.
 
