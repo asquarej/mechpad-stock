@@ -417,7 +417,7 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
   const [data, setData] = useState(() =>
     demoMode ? readSaved() : emptyWorkspaceData(profile.location || LOCATIONS[0])
   );
-  const [activeLocation, setActiveLocation] = useState(profile.location || LOCATIONS[0]);
+  const [activeLocation, setActiveLocation] = useState(canAccessAllLocations ? "All locations" : (profile.location || LOCATIONS[0]));
   const [workspaceReady, setWorkspaceReady] = useState(demoMode);
   const [workspaceError, setWorkspaceError] = useState("");
   const [page, setPage] = useState("dashboard");
@@ -444,33 +444,58 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
     technician: "", odometer: "", description: "", lines: []
   });
 
-  const allowedLocations = canAccessAllLocations ? [activeLocation] : [profile.location];
+  const allowedLocations = canAccessAllLocations
+    ? (activeLocation === "All locations" ? LOCATIONS : [activeLocation])
+    : [profile.location];
 
   useEffect(() => {
     if (supabaseClient) {
       let mounted = true;
       setWorkspaceReady(false);
       setWorkspaceError("");
-      supabaseClient.from("inventory_workspaces")
-        .select("payload")
-        .eq("location", activeLocation)
-        .maybeSingle()
-        .then(({ data: workspace, error }) => {
-          if (!mounted) return;
-          if (error) {
-            console.error("Failed to load location workspace:", error.message);
-            setWorkspaceError(`Could not load ${activeLocation}: ${error.message}`);
-            setWorkspaceReady(false);
-            return;
-          }
-          setData(normalizeWorkspaceData(workspace?.payload, activeLocation));
-          setWorkspaceReady(true);
-        });
+      const loadWorkspace = async () => {
+        const allLocations = canAccessAllLocations && activeLocation === "All locations";
+        const request = supabaseClient.from("inventory_workspaces")
+          .select("location, payload");
+        const { data: workspaces, error } = allLocations
+          ? await request.in("location", LOCATIONS)
+          : await request.eq("location", activeLocation).maybeSingle().then((result) => ({
+              data: result.data ? [result.data] : [],
+              error: result.error
+            }));
+        if (!mounted) return;
+        if (error) {
+          console.error("Failed to load location workspace:", error.message);
+          setWorkspaceError(`Could not load ${allLocations ? "all locations" : activeLocation}: ${error.message}`);
+          setWorkspaceReady(false);
+          return;
+        }
+        if (allLocations) {
+          const combined = workspaces.reduce((acc, workspace) => {
+            const locationData = normalizeWorkspaceData(workspace.payload, workspace.location);
+            return {
+              ...acc,
+              stock: [...acc.stock, ...locationData.stock],
+              batches: [...acc.batches, ...locationData.batches],
+              purchaseOrders: [...acc.purchaseOrders, ...locationData.purchaseOrders],
+              movements: [...acc.movements, ...locationData.movements],
+              receipts: [...acc.receipts, ...locationData.receipts],
+              jobs: [...acc.jobs, ...locationData.jobs],
+              audit: [...acc.audit, ...locationData.audit]
+            };
+          }, { stock: [], batches: [], purchaseOrders: [], movements: [], receipts: [], jobs: [], audit: [] });
+          setData(combined);
+        } else {
+          setData(normalizeWorkspaceData(workspaces[0]?.payload, activeLocation));
+        }
+        setWorkspaceReady(true);
+      };
+      loadWorkspace();
       return () => { mounted = false; };
     }
     setWorkspaceReady(true);
     return undefined;
-  }, [supabaseClient, activeLocation]);
+  }, [supabaseClient, activeLocation, canAccessAllLocations]);
 
   useEffect(() => {
     if (supabaseClient || !demoMode) return;
@@ -479,23 +504,29 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
 
   useEffect(() => {
     if (!supabaseClient || !workspaceReady || !canEditWorkspace) return undefined;
-    const payload = workspacePayload(data, activeLocation);
+    const locationsToSave = canAccessAllLocations && activeLocation === "All locations"
+      ? LOCATIONS
+      : [activeLocation];
     const timeout = window.setTimeout(async () => {
-      const { error } = await supabaseClient.from("inventory_workspaces").upsert({
-        location: activeLocation,
-        payload,
-        updated_at: new Date().toISOString(),
-        updated_by: profile.id
-      }, { onConflict: "location" });
-      if (error) {
-        console.error("Failed to save location workspace:", error.message);
-        setWorkspaceError(`Could not save ${activeLocation}: ${error.message}`);
+      const updatedAt = new Date().toISOString();
+      const results = await Promise.all(locationsToSave.map((location) =>
+        supabaseClient.from("inventory_workspaces").upsert({
+          location,
+          payload: workspacePayload(data, location),
+          updated_at: updatedAt,
+          updated_by: profile.id
+        }, { onConflict: "location" })
+      ));
+      const failed = results.find((result) => result.error);
+      if (failed) {
+        console.error("Failed to save location workspace:", failed.error.message);
+        setWorkspaceError(`Could not save workspace data: ${failed.error.message}`);
       } else {
         setWorkspaceError("");
       }
     }, 500);
     return () => window.clearTimeout(timeout);
-  }, [supabaseClient, workspaceReady, activeLocation, data, profile.id, canEditWorkspace]);
+  }, [supabaseClient, workspaceReady, activeLocation, data, profile.id, canEditWorkspace, canAccessAllLocations]);
 
   useEffect(() => {
     if (!allowedLocations.includes(single.location)) setSingle((x) => ({ ...x, location: allowedLocations[0] }));
@@ -933,7 +964,7 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
       <div className="layout">
         <aside className="sidebar">
           {canAccessAllLocations
-            ? <label>Location workspace<select value={activeLocation} onChange={(e) => setActiveLocation(e.target.value)}>{LOCATIONS.map((location) => <option key={location}>{location}</option>)}</select></label>
+            ? <label>Location workspace<select value={activeLocation} onChange={(e) => setActiveLocation(e.target.value)}><option>All locations</option>{LOCATIONS.map((location) => <option key={location}>{location}</option>)}</select></label>
             : <div className="workspace-location"><span className="muted">Your location workspace</span><strong>{profile.location}</strong></div>}
           <div className="notice">{roleLabel}</div>
           <nav>{[
@@ -952,7 +983,7 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
 
         <main className="content">
           {!workspaceReady
-            ? <div className="panel">Loading {activeLocation} workspace…</div>
+            ? <div className="panel">Loading {activeLocation === "All locations" ? "all location workspaces" : `${activeLocation} workspace`}…</div>
             : <>
           {page === "dashboard" && <Dashboard data={data} stock={visibleStock} jobs={visibleJobs} receipts={data.receipts} totals={totals} />}
           {page === "inventory" && <Inventory stock={visibleStock} search={search} setSearch={setSearch} filterLocation={filterLocation} setFilterLocation={setFilterLocation} locations={allowedLocations} purchaseOrders={data.purchaseOrders || []} onPurchaseOrder={openPurchaseOrder} canManage={canManageHQ} />}
