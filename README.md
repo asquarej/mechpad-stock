@@ -11,8 +11,10 @@ A React + Vite prototype for MechPad inventory and workshop operations.
 - HQ pricing queue with target-margin pricing rounded up to the next ₦50
 - Inventory quantities and stock value derived from batch balances
 - FIFO allocation of priced batches to job-card issues
-- Role/location access simulation
+- Profile-based role and location access
 - Multi-line job cards
+- Supabase email/password login with profile-assigned roles and locations
+- Location-scoped shared workspaces; HQ managers can switch between all eight locations
 - Job types:
   - Maintenance
   - Repair
@@ -58,6 +60,26 @@ The production files will be generated in the `dist` folder.
 3. Import the GitHub repository into Vercel.
 4. Vercel will detect Vite automatically.
 
+## Configure secure location workspaces
+
+The app requires Supabase to enable logins and shared workspaces:
+
+1. Create a Supabase project and run `supabase/migrations/20261011140000_location_workspaces_auth.sql` in its SQL Editor.
+2. In Supabase Authentication, create one user for each location and any HQ users. Public self-registration is not used.
+3. Add one `public.profiles` row for every Auth user. The profile role must be one of `business_head`, `manager`, `finance`, `inventory_officer`, `workshop_officer`, or `technical_ops_lead`. City roles must have their exact location; HQ roles must have a null location. Profiles can be assigned in the Supabase SQL Editor, for example:
+
+   ```sql
+   insert into public.profiles (id, display_name, role, location)
+   select id, 'Ibadan Inventory Officer', 'inventory_officer', 'Ibadan'
+   from auth.users
+   where email = 'inventory-ibadan@example.com';
+   ```
+
+4. In Vercel project settings, add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from the Supabase project API settings, then redeploy. These public client values are not secrets; never expose a Supabase service-role key in the browser or repository.
+5. Sign in with each provisioned account. Location officers are restricted to their assigned workspace by database row-level security; Business Head and Manager accounts can select any city from **Location workspace**.
+
+The SQL migration creates all eight locations and enables row-level security. Authentication users and profiles are provisioned by the project administrator; do not share passwords in source control or chat.
+
 ## Important limitation
 
-This is a browser-based prototype. It uses localStorage, so data is saved only in the current browser/device. Role restrictions are a UI simulation, not security controls. It does not yet include real authentication, a shared database, multi-user synchronization, or the full specification's transfers, stock counts, field kits, warranty, finance reconciliation, automated reorder plan, and audit immutability.
+When Supabase is configured, workspace data is shared through Supabase and row-level security limits each location account to its own workspace while HQ roles can reach all locations. Without Supabase configuration, a local demo is available in development only; production deployments fail closed and display setup instructions. The current workspace payload is JSON per location: location access is enforced in the database, but field-by-field permissions and immutable transaction/audit records are not yet enforced server-side. The full specification's transfers, stock counts, field kits, warranty, finance reconciliation, automated reorder plan, and server-transactional ledger remain future work.

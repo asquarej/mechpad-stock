@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { hasSupabaseConfig, supabase } from "./supabase";
 
 const LOCATIONS = ["Ibadan", "Ilupeju", "Kano", "Abuja", "Akure", "Ilorin", "Asaba", "Ondo"];
 const JOB_TYPES = ["Maintenance", "Repair", "Refurbishment", "Warranty", "Maintenance & Repair"];
@@ -142,6 +143,167 @@ function readSaved() {
   }
 }
 
+function emptyWorkspaceData(location) {
+  return {
+    ...initialData,
+    stock: sampleStock
+      .filter((item) => item.location === location)
+      .map((item) => ({ ...item, qty: 0 })),
+    batches: [],
+    purchaseOrders: [],
+    movements: [],
+    receipts: [],
+    jobs: [],
+    audit: []
+  };
+}
+
+function normalizeWorkspaceData(payload, location) {
+  const defaults = emptyWorkspaceData(location);
+  if (!payload || typeof payload !== "object") return defaults;
+  return {
+    ...defaults,
+    ...payload,
+    stock: Array.isArray(payload.stock) ? payload.stock : defaults.stock,
+    batches: Array.isArray(payload.batches) ? payload.batches : [],
+    purchaseOrders: Array.isArray(payload.purchaseOrders) ? payload.purchaseOrders : [],
+    movements: Array.isArray(payload.movements) ? payload.movements : [],
+    receipts: Array.isArray(payload.receipts) ? payload.receipts : [],
+    jobs: Array.isArray(payload.jobs) ? payload.jobs : [],
+    audit: Array.isArray(payload.audit) ? payload.audit : []
+  };
+}
+
+function workspacePayload(data, location) {
+  return {
+    stock: data.stock.filter((item) => item.location === location),
+    batches: (data.batches || []).filter((batch) => batch.location === location),
+    purchaseOrders: (data.purchaseOrders || []).filter((po) => po.location === location),
+    movements: (data.movements || []).filter((movement) => movement.location === location),
+    receipts: data.receipts.filter((receipt) => receipt.location === location),
+    jobs: data.jobs.filter((job) => job.location === location),
+    audit: data.audit
+  };
+}
+
+function roleName(role) {
+  return ({
+    business_head: "Business Head",
+    manager: "Manager, Aftersales & Supply Chain",
+    finance: "Finance",
+    inventory_officer: "Inventory Officer",
+    workshop_officer: "Workshop Officer",
+    technical_ops_lead: "Technical Ops Lead"
+  })[role] || role;
+}
+
+function App() {
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [demoMode, setDemoMode] = useState(false);
+
+  useEffect(() => {
+    if (!supabase) {
+      setAuthLoading(false);
+      return undefined;
+    }
+    let mounted = true;
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted) return;
+      if (error) console.error("Failed to restore Supabase session:", error.message);
+      setSession(data?.session || null);
+      setAuthLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (mounted) setSession(nextSession);
+    });
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  if (authLoading) return <div className="auth-shell"><div className="panel">Checking your session…</div></div>;
+  if (demoMode) {
+    return <InventoryWorkspace
+      key="local-demo"
+      profile={{ display_name: "Local demo", role: "business_head", location: null }}
+      onSignOut={() => setDemoMode(false)}
+      demoMode
+    />;
+  }
+  if (!hasSupabaseConfig) return <SetupRequired onDemo={() => setDemoMode(true)} />;
+  if (!session) return <SignIn />;
+  return <AuthenticatedWorkspace session={session} />;
+}
+
+function SetupRequired({ onDemo }) {
+  return <div className="auth-shell"><div className="auth-card panel">
+    <img className="company-logo" src="/mechpad-sign.png" alt="MechPad" />
+    <h1>Secure workspace setup required</h1>
+    <p>The Supabase project URL and public anon key have not been configured for this deployment.</p>
+    <p className="muted">Set <code>VITE_SUPABASE_URL</code> and <code>VITE_SUPABASE_ANON_KEY</code> in the deployment environment, then redeploy. Do not put a service-role key in the browser or repository.</p>
+    {import.meta.env.DEV && <button className="primary" onClick={onDemo}>Open local demo (not secure)</button>}
+  </div></div>;
+}
+
+function SignIn() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    if (signInError) setError(signInError.message);
+    setBusy(false);
+  };
+
+  return <div className="auth-shell"><form className="auth-card panel" onSubmit={submit}>
+    <img className="company-logo" src="/mechpad-sign.png" alt="MechPad" />
+    <h1>Sign in to MechPad</h1>
+    <p className="muted">Use the account assigned to your role and location.</p>
+    <Field label="Work email"><input required type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} /></Field>
+    <Field label="Password"><input required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></Field>
+    {error && <div className="notice auth-error" role="alert">{error}</div>}
+    <button className="primary" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+  </form></div>;
+}
+
+function AuthenticatedWorkspace({ session }) {
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let mounted = true;
+    supabase.from("profiles")
+      .select("id, display_name, role, location, active")
+      .eq("id", session.user.id)
+      .single()
+      .then(({ data, error: profileError }) => {
+        if (!mounted) return;
+        if (profileError) setError("Your account is not assigned a MechPad workspace. Ask an administrator to activate your profile.");
+        else if (!data.active) setError("This account has been deactivated. Contact the Business Head.");
+        else setProfile(data);
+        setLoading(false);
+      });
+    return () => { mounted = false; };
+  }, [session.user.id]);
+
+  const signOut = async () => {
+    const { error: signOutError } = await supabase.auth.signOut();
+    if (signOutError) setError(`Unable to sign out: ${signOutError.message}`);
+  };
+
+  if (loading) return <div className="auth-shell"><div className="panel">Loading your workspace…</div></div>;
+  if (error || !profile) return <div className="auth-shell"><div className="auth-card panel"><h1>Workspace unavailable</h1><p role="alert">{error || "Profile could not be loaded."}</p><button onClick={signOut}>Sign out</button></div></div>;
+  return <InventoryWorkspace key={profile.id} profile={profile} supabaseClient={supabase} onSignOut={signOut} />;
+}
+
 function batchRemaining(batch, movements) {
   const issued = movements
     .filter((movement) => movement.batchId === batch.id)
@@ -246,9 +408,18 @@ function addReceiptDelivery(receipts, delivery) {
   } : receipt);
 }
 
-function App() {
-  const [data, setData] = useState(readSaved);
-  const [role, setRole] = useState("manager");
+function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMode = false }) {
+  const canAccessAllLocations = ["business_head", "manager"].includes(profile.role);
+  const canManageHQ = ["business_head", "manager"].includes(profile.role);
+  const canOperateLocation = ["business_head", "manager", "inventory_officer", "workshop_officer", "technical_ops_lead"].includes(profile.role);
+  const canReceiveStock = canOperateLocation;
+  const canEditWorkspace = canOperateLocation;
+  const [data, setData] = useState(() =>
+    demoMode ? readSaved() : emptyWorkspaceData(profile.location || LOCATIONS[0])
+  );
+  const [activeLocation, setActiveLocation] = useState(profile.location || LOCATIONS[0]);
+  const [workspaceReady, setWorkspaceReady] = useState(demoMode);
+  const [workspaceError, setWorkspaceError] = useState("");
   const [page, setPage] = useState("dashboard");
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState("");
@@ -273,18 +444,65 @@ function App() {
     technician: "", odometer: "", description: "", lines: []
   });
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  }, [data]);
+  const allowedLocations = canAccessAllLocations ? [activeLocation] : [profile.location];
 
-  const allowedLocations = role === "manager" ? LOCATIONS : [role.split(":")[1] || "Ibadan"];
+  useEffect(() => {
+    if (supabaseClient) {
+      let mounted = true;
+      setWorkspaceReady(false);
+      setWorkspaceError("");
+      supabaseClient.from("inventory_workspaces")
+        .select("payload")
+        .eq("location", activeLocation)
+        .maybeSingle()
+        .then(({ data: workspace, error }) => {
+          if (!mounted) return;
+          if (error) {
+            console.error("Failed to load location workspace:", error.message);
+            setWorkspaceError(`Could not load ${activeLocation}: ${error.message}`);
+            setWorkspaceReady(false);
+            return;
+          }
+          setData(normalizeWorkspaceData(workspace?.payload, activeLocation));
+          setWorkspaceReady(true);
+        });
+      return () => { mounted = false; };
+    }
+    setWorkspaceReady(true);
+    return undefined;
+  }, [supabaseClient, activeLocation]);
+
+  useEffect(() => {
+    if (supabaseClient || !demoMode) return;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  }, [supabaseClient, demoMode, data]);
+
+  useEffect(() => {
+    if (!supabaseClient || !workspaceReady || !canEditWorkspace) return undefined;
+    const payload = workspacePayload(data, activeLocation);
+    const timeout = window.setTimeout(async () => {
+      const { error } = await supabaseClient.from("inventory_workspaces").upsert({
+        location: activeLocation,
+        payload,
+        updated_at: new Date().toISOString(),
+        updated_by: profile.id
+      }, { onConflict: "location" });
+      if (error) {
+        console.error("Failed to save location workspace:", error.message);
+        setWorkspaceError(`Could not save ${activeLocation}: ${error.message}`);
+      } else {
+        setWorkspaceError("");
+      }
+    }, 500);
+    return () => window.clearTimeout(timeout);
+  }, [supabaseClient, workspaceReady, activeLocation, data, profile.id, canEditWorkspace]);
 
   useEffect(() => {
     if (!allowedLocations.includes(single.location)) setSingle((x) => ({ ...x, location: allowedLocations[0] }));
     if (!allowedLocations.includes(bulk.location)) setBulk((x) => ({ ...x, location: allowedLocations[0] }));
     if (!allowedLocations.includes(job.location)) setJob((x) => ({ ...x, location: allowedLocations[0] }));
     if (filterLocation && !allowedLocations.includes(filterLocation)) setFilterLocation("");
-  }, [role]);
+  }, [activeLocation]);
 
   const visibleStock = useMemo(() => {
     const query = search.toLowerCase();
@@ -293,7 +511,7 @@ function App() {
       (!filterLocation || item.location === filterLocation) &&
       `${item.ref} ${item.name}`.toLowerCase().includes(query)
     );
-  }, [data.stock, data.batches, data.movements, search, filterLocation, role]);
+  }, [data.stock, data.batches, data.movements, search, filterLocation, activeLocation]);
 
   const visibleJobs = data.jobs.filter((item) => allowedLocations.includes(item.location));
   const visibleReceipts = data.receipts.filter((item) => allowedLocations.includes(item.location));
@@ -391,7 +609,8 @@ function App() {
           !current.stock.some((item) => item.ref === line.ref && item.location === purchaseOrder.location)
         )
         .map((line, index) => {
-          const catalogItem = current.stock.find((item) => item.ref === line.ref);
+          const catalogItem = current.stock.find((item) => item.ref === line.ref) ||
+            sampleStock.find((item) => item.ref === line.ref);
           return {
             ...catalogItem,
             id: `PO-STOCK-${Date.now()}-${index}`,
@@ -696,7 +915,7 @@ function App() {
     setPage("jobs");
   };
 
-  const roleLabel = role === "manager" ? "Manager access: all locations." : `Inventory Officer access: ${allowedLocations[0]} only.`;
+  const roleLabel = `${roleName(profile.role)}${profile.location ? ` · ${profile.location}` : " · HQ access"}`;
 
   return (
     <div className="app-shell">
@@ -705,38 +924,50 @@ function App() {
           <img className="company-logo" src="/mechpad-sign.png" alt="MechPad" />
           <div className="muted">Aftersales & Supply Chain Management</div>
         </div>
+        <div className="account-actions">
+          <div><strong>{profile.display_name}</strong><div className="muted">{roleLabel}</div></div>
+          <button onClick={onSignOut}>{demoMode ? "Exit demo" : "Sign out"}</button>
+        </div>
       </header>
 
       <div className="layout">
         <aside className="sidebar">
-          <label>Active role
-            <select value={role} onChange={(e) => setRole(e.target.value)}>
-              <option value="manager">Aftersales & Supply Chain Manager</option>
-              {LOCATIONS.map((location) => <option key={location} value={`inventory:${location}`}>Inventory Officer — {location}</option>)}
-            </select>
-          </label>
+          {canAccessAllLocations
+            ? <label>Location workspace<select value={activeLocation} onChange={(e) => setActiveLocation(e.target.value)}>{LOCATIONS.map((location) => <option key={location}>{location}</option>)}</select></label>
+            : <div className="workspace-location"><span className="muted">Your location workspace</span><strong>{profile.location}</strong></div>}
           <div className="notice">{roleLabel}</div>
           <nav>{[
             ["dashboard", "Dashboard"], ["inventory", "Inventory"], ["purchase-orders", "Purchase Orders"],
             ["inbound", "Inbound Log"], ["prices-needed", "Prices Needed"], ["receipts", "Supplier Receipts"],
             ["jobs", "Job Cards"], ["reports", "Reports"], ["audit", "Activity Log"]
-          ].map(([key, label]) => <button key={key} className={page === key ? "active" : ""} onClick={() => setPage(key)}>{label}</button>)}</nav>
-          <div className="muted side-note">Demo data is saved in this browser.</div>
+          ].filter(([key]) =>
+            (key !== "prices-needed" || canManageHQ) &&
+            (key !== "purchase-orders" || canReceiveStock) &&
+            (key !== "inbound" || canReceiveStock) &&
+            (key !== "jobs" || canOperateLocation)
+          ).map(([key, label]) => <button key={key} className={page === key ? "active" : ""} onClick={() => setPage(key)}>{label}</button>)}</nav>
+          {workspaceError && <div className="notice auth-error" role="alert">{workspaceError}</div>}
+          <div className="muted side-note">{demoMode ? "Local demo data is saved only in this browser." : "Workspace data is shared securely with your authorized location team."}</div>
         </aside>
 
         <main className="content">
+          {!workspaceReady
+            ? <div className="panel">Loading {activeLocation} workspace…</div>
+            : <>
           {page === "dashboard" && <Dashboard data={data} stock={visibleStock} jobs={visibleJobs} receipts={data.receipts} totals={totals} />}
-          {page === "inventory" && <Inventory stock={visibleStock} search={search} setSearch={setSearch} filterLocation={filterLocation} setFilterLocation={setFilterLocation} locations={allowedLocations} purchaseOrders={data.purchaseOrders || []} onPurchaseOrder={openPurchaseOrder} canManage={role === "manager"} />}
-          {page === "purchase-orders" && <PurchaseOrders purchaseOrders={visiblePurchaseOrders} onNew={openPurchaseOrder} onReceive={openReceiveDelivery} canManage={role === "manager"} />}
-          {page === "inbound" && <Inbound batches={inboundBatches} />}
-          {page === "prices-needed" && <PricesNeeded batches={pricesNeeded} onPrice={openPriceBatch} canManage={role === "manager"} />}
+          {page === "inventory" && <Inventory stock={visibleStock} search={search} setSearch={setSearch} filterLocation={filterLocation} setFilterLocation={setFilterLocation} locations={allowedLocations} purchaseOrders={data.purchaseOrders || []} onPurchaseOrder={openPurchaseOrder} canManage={canManageHQ} />}
+          {page === "purchase-orders" && canReceiveStock && <PurchaseOrders purchaseOrders={visiblePurchaseOrders} onNew={openPurchaseOrder} onReceive={openReceiveDelivery} canManage={canManageHQ} />}
+          {page === "inbound" && canReceiveStock && <Inbound batches={inboundBatches} />}
+          {page === "prices-needed" && <PricesNeeded batches={pricesNeeded} onPrice={openPriceBatch} canManage={canManageHQ} />}
           {page === "receipts" && <Receipts receipts={data.receipts} />}
-          {page === "jobs" && <Jobs jobs={visibleJobs} onNew={() => { setJob((current) => ({ ...current, location: allowedLocations[0], lines: [] })); setModal("job"); }} />}
+          {page === "jobs" && canOperateLocation && <Jobs jobs={visibleJobs} onNew={() => { setJob((current) => ({ ...current, location: allowedLocations[0], lines: [] })); setModal("job"); }} canOperate={canOperateLocation} />}
           {page === "reports" && <Reports jobs={visibleJobs} totals={totals} />}
           {page === "audit" && <Audit entries={data.audit} />}
+            </>}
         </main>
       </div>
 
+      {workspaceError && <div className="workspace-error" role="alert">{workspaceError}</div>}
       {modal === "purchase-order" && <Modal title="Create purchase order" onClose={() => setModal(null)}>
         <form onSubmit={createPurchaseOrder}>
           <div className="form-grid">
@@ -747,7 +978,7 @@ function App() {
           </div>
           <div className="section-head"><h3>Order lines</h3><button type="button" onClick={() => setPoForm((current) => ({ ...current, lines: [...current.lines, { ref: "", qtyOrdered: 1, unitCost: "" }] }))}>＋ Add line</button></div>
           {poForm.lines.map((line, index) => <div className="job-line" key={index}>
-            <Field label="Item code"><select required value={line.ref} onChange={(e) => setPoForm((current) => ({ ...current, lines: current.lines.map((entry, lineIndex) => lineIndex === index ? { ...entry, ref: e.target.value } : entry) }))}><option value="">Select an item</option>{[...new Map(data.stock.map((item) => [item.ref, item])).values()].map((item) => <option key={item.ref} value={item.ref}>{item.ref} — {item.name}</option>)}</select></Field>
+            <Field label="Item code"><select required value={line.ref} onChange={(e) => setPoForm((current) => ({ ...current, lines: current.lines.map((entry, lineIndex) => lineIndex === index ? { ...entry, ref: e.target.value } : entry) }))}><option value="">Select an item</option>{[...new Map([...sampleStock, ...data.stock].map((item) => [item.ref, item])).values()].map((item) => <option key={item.ref} value={item.ref}>{item.ref} — {item.name}</option>)}</select></Field>
             <Field label="Quantity"><input required type="number" min="1" step="1" value={line.qtyOrdered} onChange={(e) => setPoForm((current) => ({ ...current, lines: current.lines.map((entry, lineIndex) => lineIndex === index ? { ...entry, qtyOrdered: e.target.value } : entry) }))} /></Field>
             <Field label="Unit cost"><input required type="number" min="0.01" step="0.01" value={line.unitCost} onChange={(e) => setPoForm((current) => ({ ...current, lines: current.lines.map((entry, lineIndex) => lineIndex === index ? { ...entry, unitCost: e.target.value } : entry) }))} /></Field>
             {poForm.lines.length > 1 && <button type="button" onClick={() => setPoForm((current) => ({ ...current, lines: current.lines.filter((_, lineIndex) => lineIndex !== index) }))}>Remove</button>}
@@ -923,8 +1154,8 @@ function PricesNeeded({ batches, onPrice, canManage }) {
 function Receipts({ receipts }) {
   return <><div className="page-head"><h2>Supplier Receipts</h2></div><div className="panel"><div className="table-wrap"><table><thead><tr><th>Invoice</th><th>Vendor</th><th>PO number</th><th>Location</th><th>Lines</th><th>Qty received</th><th>Total landed cost</th><th>Deliveries</th><th>Last delivery</th><th>Received by</th></tr></thead><tbody>{receipts.map((x)=><tr key={x.id}><td>{x.invoice}</td><td>{x.supplier}</td><td>{x.poNo || "—"}</td><td>{x.location}</td><td>{x.lines}</td><td>{x.qty || "—"}</td><td>{money(x.total)}</td><td>{x.deliveryCount || (Array.isArray(x.deliveries) ? x.deliveries.length : Number(x.deliveries)) || 1}</td><td>{x.date}</td><td>{x.verifier}</td></tr>)}</tbody></table></div></div></>;
 }
-function Jobs({ jobs, onNew }) {
-  return <><div className="page-head"><h2>Job Cards</h2><button className="primary" onClick={onNew}>＋ New job card</button></div><div className="notice">Every job card has one job type. Each part or engine-oil line is classified separately.</div><div className="panel"><div className="table-wrap"><table><thead><tr><th>Job card</th><th>Vehicle</th><th>Captain</th><th>Type</th><th>Location</th><th>Captain-paid</th><th>Complimentary</th><th>Status</th></tr></thead><tbody>{jobs.map((j)=><tr key={j.id}><td>{j.id}</td><td>{j.vehicle}</td><td>{j.captain}</td><td><span className="tag blue">{j.type}</span></td><td>{j.location}</td><td>{money(j.lines.filter((x)=>x.payment==="Captain-paid").reduce((a,x)=>a+x.qty*x.price,0))}</td><td>{money(j.lines.filter((x)=>x.payment==="Company complimentary").reduce((a,x)=>a+x.qty*x.price,0))}</td><td><span className="tag">{j.status}</span></td></tr>)}</tbody></table></div></div></>;
+function Jobs({ jobs, onNew, canOperate }) {
+  return <><div className="page-head"><h2>Job Cards</h2>{canOperate && <button className="primary" onClick={onNew}>＋ New job card</button>}</div><div className="notice">Every job card has one job type. Each part or engine-oil line is classified separately.</div><div className="panel"><div className="table-wrap"><table><thead><tr><th>Job card</th><th>Vehicle</th><th>Captain</th><th>Type</th><th>Location</th><th>Captain-paid</th><th>Complimentary</th><th>Status</th></tr></thead><tbody>{jobs.map((j)=><tr key={j.id}><td>{j.id}</td><td>{j.vehicle}</td><td>{j.captain}</td><td><span className="tag blue">{j.type}</span></td><td>{j.location}</td><td>{money(j.lines.filter((x)=>x.payment==="Captain-paid").reduce((a,x)=>a+x.qty*x.price,0))}</td><td>{money(j.lines.filter((x)=>x.payment==="Company complimentary").reduce((a,x)=>a+x.qty*x.price,0))}</td><td><span className="tag">{j.status}</span></td></tr>)}</tbody></table></div></div></>;
 }
 function Reports({ jobs, totals }) {
   return <><div className="page-head"><h2>Reports</h2></div><div className="metrics">{JOB_TYPES.slice(0,4).map((type)=><Metric key={type} label={type} value={jobs.filter((x)=>x.type===type).length}/>)}</div><div className="panel"><h3>Cost classification</h3><div className="notice"><b>Captain-paid / recoverable:</b> {money(totals.paid)}</div><div className="notice"><b>Company complimentary:</b> {money(totals.free)}</div><div className="notice"><b>Combined value:</b> {money(totals.paid+totals.free)}</div></div></>;
