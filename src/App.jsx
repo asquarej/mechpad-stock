@@ -481,7 +481,7 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
               movements: [...acc.movements, ...locationData.movements],
               receipts: [...acc.receipts, ...locationData.receipts],
               jobs: [...acc.jobs, ...locationData.jobs],
-              audit: [...acc.audit, ...locationData.audit]
+              audit: [...new Set([...acc.audit, ...locationData.audit])]
             };
           }, { stock: [], batches: [], purchaseOrders: [], movements: [], receipts: [], jobs: [], audit: [] });
           setData(combined);
