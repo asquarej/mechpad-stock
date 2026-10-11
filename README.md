@@ -4,11 +4,14 @@ A React + Vite prototype for MechPad inventory and workshop operations.
 
 ## Included features
 
-- Location-based inventory
+- Multi-location inventory with opening stock batches
+- Purchase orders with vendor, invoice, location, item lines, cost, and transport
+- Partial deliveries against the same PO and vendor invoice
+- Inbound batch log, landed cost, and receipt summaries by invoice
+- HQ pricing queue with target-margin pricing rounded up to the next ₦50
+- Inventory quantities and stock value derived from batch balances
+- FIFO allocation of priced batches to job-card issues
 - Role/location access simulation
-- Single stock upload
-- CSV bulk upload
-- Supplier receipts
 - Multi-line job cards
 - Job types:
   - Maintenance
@@ -57,4 +60,4 @@ The production files will be generated in the `dist` folder.
 
 ## Important limitation
 
-This is a browser-based prototype. It uses localStorage, so data is saved only in the current browser/device. It does not yet include real authentication, a shared database, or multi-user synchronization.
+This is a browser-based prototype. It uses localStorage, so data is saved only in the current browser/device. Role restrictions are a UI simulation, not security controls. It does not yet include real authentication, a shared database, multi-user synchronization, or the full specification's transfers, stock counts, field kits, warranty, finance reconciliation, automated reorder plan, and audit immutability.
