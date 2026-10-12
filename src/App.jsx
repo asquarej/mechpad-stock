@@ -7,7 +7,7 @@ const PAYMENT_TYPES = ["Captain-paid", "Company complimentary"];
 const PART_CATEGORIES = ["Body & Frame", "Brake System", "Consumables & Service Items", "Control & Cables", "Drive System", "Electrical & Electronics", "Engine & Transmission", "Fuel, Air & Filter System", "Lubricants", "Suspension & Steering", "Wheels & Tyres"];
 
 function generatePartCode(value) {
-  const name = String(value || "").trim().replace(/\\s+/g, " ");
+  const name = String(value || "").trim().replace(/\s+/g, " ");
   if (!name) return "";
   const words = name.split(" ");
   if (words.length === 1) return (words[0] + "XXXX").slice(0, 4).toUpperCase();
@@ -766,7 +766,8 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
         )
         .map((line, index) => {
           const catalogItem = current.stock.find((item) => item.ref === line.ref) ||
-            sampleStock.find((item) => item.ref === line.ref);
+            sampleStock.find((item) => item.ref === line.ref) ||
+            generatedPartOptions.find((item) => item.ref === line.ref);
           return {
             ...catalogItem,
             id: `PO-STOCK-${Date.now()}-${index}`,
