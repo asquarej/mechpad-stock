@@ -11,7 +11,7 @@ function generatePartCode(value) {
   if (!name) return "";
   const words = name.split(" ");
   if (words.length === 1) return (words[0] + "XXXX").slice(0, 4).toUpperCase();
-  return (words[0].slice(0, 2) + words[1].slice(0, 1) + words[words.length - 1].slice(0, 1)).slice(0, 4).toUpperCase();
+  return (words[0].slice(0, 2) + words[1].slice(0, 1) + words[words.length - 1].slice(0, 1)).slice(0, 4).toUpperCase().padEnd(4, "X");
 }
 const STORAGE_KEY = "mechpadInventoryLedgerV5";
 const LEGACY_STORAGE_KEY = "mechpadInventoryReactSampleV4";
