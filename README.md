@@ -12,6 +12,10 @@ A React + Vite prototype for MechPad inventory and workshop operations.
 - Inventory quantities and stock value derived from batch balances
 - FIFO allocation of priced batches to job-card issues
 - Profile-based role and location access
+- Central Part Master with permanent serials, four-character part codes, and vehicle-specific 13-character part numbers
+- Multi-model part compatibility and optional supplier SKU suffixes
+- Purchase-order selection from the part catalogue without creating stock until receipt
+- Imported catalogue: 324 master parts and 577 vehicle-specific/SKU rows from the MechPad Part Number Generator workbook
 - Multi-line job cards
 - Supabase email/password login with profile-assigned roles and locations
 - Location-scoped shared workspaces; HQ managers can switch between all eight locations
