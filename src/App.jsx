@@ -4,6 +4,15 @@ import { hasSupabaseConfig, supabase } from "./supabase";
 const LOCATIONS = ["Ibadan", "Ilupeju", "Kano", "Abuja", "Akure", "Ilorin", "Asaba", "Ondo"];
 const JOB_TYPES = ["Maintenance", "Repair", "Refurbishment", "Warranty", "Maintenance & Repair"];
 const PAYMENT_TYPES = ["Captain-paid", "Company complimentary"];
+const PART_CATEGORIES = ["Body & Frame", "Brake System", "Consumables & Service Items", "Control & Cables", "Drive System", "Electrical & Electronics", "Engine & Transmission", "Fuel, Air & Filter System", "Lubricants", "Suspension & Steering", "Wheels & Tyres"];
+
+function generatePartCode(value) {
+  const name = String(value || "").trim().replace(/\\s+/g, " ");
+  if (!name) return "";
+  const words = name.split(" ");
+  if (words.length === 1) return (words[0] + "XXXX").slice(0, 4).toUpperCase();
+  return (words[0].slice(0, 2) + words[1].slice(0, 1) + words[words.length - 1].slice(0, 1)).slice(0, 4).toUpperCase();
+}
 const STORAGE_KEY = "mechpadInventoryLedgerV5";
 const LEGACY_STORAGE_KEY = "mechpadInventoryReactSampleV4";
 
@@ -420,6 +429,13 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
   const [activeLocation, setActiveLocation] = useState(canAccessAllLocations ? "All locations" : (profile.location || LOCATIONS[0]));
   const [workspaceReady, setWorkspaceReady] = useState(demoMode);
   const [workspaceError, setWorkspaceError] = useState("");
+  const [partMaster, setPartMaster] = useState([]);
+  const [vehicleMaster, setVehicleMaster] = useState([]);
+  const [partNumbers, setPartNumbers] = useState([]);
+  const [partSearch, setPartSearch] = useState("");
+  const [partError, setPartError] = useState("");
+  const [partSaving, setPartSaving] = useState(false);
+  const [partForm, setPartForm] = useState({ name: "", category: "Body & Frame", notes: "", vehicleModel: "", suffix: "" });
   const [page, setPage] = useState("dashboard");
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState("");
@@ -447,6 +463,42 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
   const allowedLocations = canAccessAllLocations
     ? (activeLocation === "All locations" ? LOCATIONS : [activeLocation])
     : [profile.location];
+
+  useEffect(() => {
+    if (!supabaseClient) {
+      setVehicleMaster([
+        { vehicle_model: "Neo NX", brand: "TVS", vehicle_type: "2W", powertrain: "ICE", model_code: "NN", prefix: "2WTVNN" },
+        { vehicle_model: "HLX 100", brand: "TVS", vehicle_type: "2W", powertrain: "ICE", model_code: "HL", prefix: "2WTVHL" },
+        { vehicle_model: "King Deluxe", brand: "TVS", vehicle_type: "3W", powertrain: "ICE", model_code: "KD", prefix: "3WTVKD" },
+        { vehicle_model: "RE", brand: "Bajaj", vehicle_type: "3W", powertrain: "ICE", model_code: "RE", prefix: "3WBARE" },
+        { vehicle_model: "Pulsar", brand: "Bajaj", vehicle_type: "2W", powertrain: "ICE", model_code: "PU", prefix: "2WBAPU" },
+        { vehicle_model: "Champion 100", brand: "Qlink", vehicle_type: "2W", powertrain: "ICE", model_code: "CH", prefix: "2WQLCH" },
+        { vehicle_model: "Hunter", brand: "Hero", vehicle_type: "2W", powertrain: "ICE", model_code: "HU", prefix: "2WHEHU" },
+        { vehicle_model: "Ekon M1", brand: "Spiro", vehicle_type: "2W", powertrain: "EV", model_code: "EM", prefix: "2WSPEM" },
+        { vehicle_model: "Crux Rev", brand: "Yamaha", vehicle_type: "2W", powertrain: "ICE", model_code: "CR", prefix: "2WYACR" }
+      ]);
+      return undefined;
+    }
+    let mounted = true;
+    const loadPartCatalogue = async () => {
+      const [partsResult, vehiclesResult, numbersResult] = await Promise.all([
+        supabaseClient.from("part_master").select("*").order("serial_no"),
+        supabaseClient.from("vehicle_master").select("*").eq("active", true).order("vehicle_model"),
+        supabaseClient.from("part_numbers").select("*").eq("active", true).order("full_sku")
+      ]);
+      if (!mounted) return;
+      const failure = partsResult.error || vehiclesResult.error || numbersResult.error;
+      if (failure) {
+        setPartError(`Could not load the part catalogue: ${failure.message}`);
+        return;
+      }
+      setPartMaster(partsResult.data || []);
+      setVehicleMaster(vehiclesResult.data || []);
+      setPartNumbers(numbersResult.data || []);
+    };
+    loadPartCatalogue();
+    return () => { mounted = false; };
+  }, [supabaseClient]);
 
   useEffect(() => {
     if (supabaseClient) {
@@ -573,6 +625,56 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
   const updateData = (updater, message) => {
     setData((current) => updater(current));
     if (message) log(message);
+  };
+
+  const createPart = async (event) => {
+    event.preventDefault();
+    setPartError("");
+    const name = partForm.name.trim().replace(/\\s+/g, " ");
+    if (!name || !partForm.category) return setPartError("Enter a part name and category.");
+    if (partMaster.some((part) => String(part.part_name || "").trim().toLowerCase() === name.toLowerCase())) {
+      return setPartError("This part name already exists. Search the catalogue before registering it.");
+    }
+    setPartSaving(true);
+    try {
+      if (supabaseClient && !demoMode) {
+        const { data: result, error } = await supabaseClient.rpc("create_part_master_part", {
+          p_part_name: name,
+          p_category: partForm.category,
+          p_notes: partForm.notes.trim() || null,
+          p_vehicle_model: partForm.vehicleModel || null,
+          p_suffix: partForm.suffix.trim() || null
+        });
+        if (error) throw error;
+        const created = Array.isArray(result) ? result[0] : result;
+        if (!created) throw new Error("The database did not return the new part record.");
+        setPartMaster((current) => [...current, {
+          serial_no: created.serial_no, part_name: created.part_name, category: created.category,
+          part_code: created.part_code, notes: partForm.notes.trim() || null, active: true
+        }].sort((a, b) => Number(a.serial_no) - Number(b.serial_no)));
+        if (created.part_number) setPartNumbers((current) => [...current, {
+          serial_no: created.serial_no, vehicle_model: created.vehicle_model,
+          part_number: created.part_number, full_sku: created.full_sku, active: true
+        }]);
+      } else {
+        const serialNo = Math.max(324, ...partMaster.map((part) => Number(part.serial_no) || 0)) + 1;
+        if (serialNo > 999) throw new Error("The generator has reached its 999-part serial limit.");
+        const code = generatePartCode(name);
+        const vehicle = vehicleMaster.find((item) => item.vehicle_model === partForm.vehicleModel);
+        const core = vehicle ? `${vehicle.prefix}${code}${String(serialNo).padStart(3, "0")}` : null;
+        const suffix = partForm.suffix.trim().toUpperCase();
+        const created = { serial_no: serialNo, part_name: name, category: partForm.category, part_code: code, notes: partForm.notes.trim() || null, active: true };
+        setPartMaster((current) => [...current, created]);
+        if (core) setPartNumbers((current) => [...current, { serial_no: serialNo, vehicle_model: vehicle.vehicle_model, part_number: core, full_sku: suffix ? `${core}-${suffix}` : core, active: true }]);
+      }
+      setPartForm({ name: "", category: "Body & Frame", notes: "", vehicleModel: "", suffix: "" });
+      setModal(null);
+      setPage("parts");
+    } catch (error) {
+      setPartError(error.message || "Could not register this part.");
+    } finally {
+      setPartSaving(false);
+    }
   };
 
   const openSingle = () => {
@@ -970,7 +1072,7 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
           <nav>{[
             ["dashboard", "Dashboard"], ["inventory", "Inventory"], ["purchase-orders", "Purchase Orders"],
             ["inbound", "Inbound Log"], ["prices-needed", "Prices Needed"], ["receipts", "Supplier Receipts"],
-            ["jobs", "Job Cards"], ["reports", "Reports"], ["audit", "Activity Log"]
+            ["jobs", "Job Cards"], ["parts", "Parts Catalogue"], ["reports", "Reports"], ["audit", "Activity Log"]
           ].filter(([key]) =>
             (key !== "prices-needed" || canManageHQ) &&
             (key !== "purchase-orders" || canReceiveStock) &&
@@ -992,6 +1094,7 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
           {page === "prices-needed" && <PricesNeeded batches={pricesNeeded} onPrice={openPriceBatch} canManage={canManageHQ} />}
           {page === "receipts" && <Receipts receipts={data.receipts} />}
           {page === "jobs" && canOperateLocation && <Jobs jobs={visibleJobs} onNew={() => { setJob((current) => ({ ...current, location: allowedLocations[0], lines: [] })); setModal("job"); }} canOperate={canOperateLocation} />}
+          {page === "parts" && <PartsCatalogue parts={partMaster} partNumbers={partNumbers} vehicles={vehicleMaster} search={partSearch} setSearch={setPartSearch} error={partError} canManage={canManageHQ} onNew={() => { setPartError(""); setPartForm({ name: "", category: "Body & Frame", notes: "", vehicleModel: "", suffix: "" }); setModal("new-part"); }} />}
           {page === "reports" && <Reports jobs={visibleJobs} totals={totals} />}
           {page === "audit" && <Audit entries={data.audit} />}
             </>}
@@ -999,6 +1102,22 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
       </div>
 
       {workspaceError && <div className="workspace-error" role="alert">{workspaceError}</div>}
+      {modal === "new-part" && <Modal title="Register new part" onClose={() => setModal(null)}>
+        <form onSubmit={createPart}>
+          <div className="notice">Registration creates a catalogue record only. It does not add stock, a purchase order or a receipt. Part serials are permanent.</div>
+          <div className="form-grid">
+            <Field label="Part name"><input required maxLength="120" value={partForm.name} onChange={(e) => setPartForm((current) => ({ ...current, name: e.target.value }))} placeholder="e.g. Front Brake Shoe" /></Field>
+            <Field label="Category"><select required value={partForm.category} onChange={(e) => setPartForm((current) => ({ ...current, category: e.target.value }))}>{PART_CATEGORIES.map((category) => <option key={category}>{category}</option>)}</select></Field>
+            <Field label="Generated part code"><input readOnly value={generatePartCode(partForm.name)} placeholder="Generated from part name" /></Field>
+            <Field label="Vehicle model (optional)"><select value={partForm.vehicleModel} onChange={(e) => setPartForm((current) => ({ ...current, vehicleModel: e.target.value }))}><option value="">Catalogue only — no vehicle number yet</option>{vehicleMaster.map((vehicle) => <option key={vehicle.vehicle_model} value={vehicle.vehicle_model}>{vehicle.vehicle_model} · {vehicle.prefix}</option>)}</select></Field>
+            <Field label="Optional suffix (e.g. OEM)"><input maxLength="12" value={partForm.suffix} onChange={(e) => setPartForm((current) => ({ ...current, suffix: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "") }))} placeholder="Leave blank for standard part number" /></Field>
+            <Field label="Notes"><input value={partForm.notes} onChange={(e) => setPartForm((current) => ({ ...current, notes: e.target.value }))} placeholder="Optional specifications or details" /></Field>
+          </div>
+          {partForm.name.trim() && <div className="notice">{partForm.vehicleModel ? `Preview: ${vehicleMaster.find((vehicle) => vehicle.vehicle_model === partForm.vehicleModel)?.prefix || "PREFIX"}${generatePartCode(partForm.name)}${String(Math.max(324, ...partMaster.map((part) => Number(part.serial_no) || 0)) + 1).padStart(3, "0")}${partForm.suffix ? `-${partForm.suffix}` : ""}` : `Part code ${generatePartCode(partForm.name)} will be assigned a permanent serial when saved.`}</div>}
+          {partError && <div className="notice auth-error" role="alert">{partError}</div>}
+          <div className="form-actions"><button type="button" onClick={() => setModal(null)}>Cancel</button><button className="primary" disabled={partSaving}>{partSaving ? "Registering…" : "Register part"}</button></div>
+        </form>
+      </Modal>}
       {modal === "purchase-order" && <Modal title="Create purchase order" onClose={() => setModal(null)}>
         <form onSubmit={createPurchaseOrder}>
           <div className="form-grid">
@@ -1129,6 +1248,20 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
       </Modal>}
     </div>
   );
+}
+
+function PartsCatalogue({ parts, partNumbers, vehicles, search, setSearch, error, canManage, onNew }) {
+  const query = search.trim().toLowerCase();
+  const filtered = parts.filter((part) => `${part.serial_no} ${part.part_code} ${part.part_name} ${part.category}`.toLowerCase().includes(query));
+  const numbersFor = (serial) => partNumbers.filter((number) => Number(number.serial_no) === Number(serial));
+  return <>
+    <div className="page-head"><h2>Parts Catalogue</h2>{canManage && <button className="primary" onClick={onNew}>＋ Register new part</button>}</div>
+    <div className="notice">The master catalogue is separate from stock. A part can be registered before it has ever been purchased. Serial numbers are permanent and never reused.</div>
+    {error && <div className="notice auth-error" role="alert">{error}</div>}
+    <div className="panel"><div className="form-grid"><Field label="Search parts"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Part name, code, serial or category" /></Field><div className="metric"><span className="muted">Registered parts</span><strong>{parts.length}</strong></div><div className="metric"><span className="muted">Vehicle models</span><strong>{vehicles.length}</strong></div></div>
+      <div className="table-wrap"><table><thead><tr><th>Serial</th><th>Part code</th><th>Part name</th><th>Category</th><th>Vehicle part numbers</th><th>Status</th></tr></thead><tbody>{filtered.map((part) => <tr key={part.serial_no}><td>{String(part.serial_no).padStart(3, "0")}</td><td><strong>{part.part_code}</strong><div className="muted">{part.part_code}{String(part.serial_no).padStart(3, "0")}</div></td><td>{part.part_name}{part.notes && <div className="muted">{part.notes}</div>}</td><td>{part.category}</td><td>{numbersFor(part.serial_no).length ? numbersFor(part.serial_no).map((number) => <div key={number.id || number.full_sku}>{number.vehicle_model || vehicles.find((vehicle) => vehicle.prefix === String(number.full_sku).slice(0, 6))?.vehicle_model || "Vehicle"}: {number.full_sku}</div>) : <span className="muted">Not assigned to a vehicle</span>}</td><td><span className={`tag ${part.active === false ? "red" : "green"}`}>{part.active === false ? "INACTIVE" : "ACTIVE"}</span></td></tr>)}{!filtered.length && <tr><td colSpan="6" className="muted">{parts.length ? "No parts match your search." : "No master parts are loaded yet."}</td></tr>}</tbody></table></div>
+    </div>
+  </>;
 }
 
 function Field({ label, children }) { return <label>{label}{children}</label>; }
