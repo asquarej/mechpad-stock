@@ -436,6 +436,8 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
   const [partError, setPartError] = useState("");
   const [partSaving, setPartSaving] = useState(false);
   const [partForm, setPartForm] = useState({ name: "", category: "Body & Frame", notes: "", vehicleModel: "", suffix: "" });
+  const [compatibilityPartSerial, setCompatibilityPartSerial] = useState(null);
+  const [compatibilityForm, setCompatibilityForm] = useState({ vehicleModel: "", suffix: "" });
   const [page, setPage] = useState("dashboard");
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState("");
@@ -697,6 +699,39 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
       setPartError(error.message || "Could not register this part.");
     } finally {
       setPartSaving(false);
+    }
+  };
+
+  const addPartModel = async (event) => {
+    event.preventDefault();
+    setPartError("");
+    const part = partMaster.find((item) => Number(item.serial_no) === Number(compatibilityPartSerial));
+    if (!part || !compatibilityForm.vehicleModel) return setPartError("Select a vehicle model.");
+    try {
+      if (supabaseClient && !demoMode) {
+        const { data: result, error } = await supabaseClient.rpc("add_part_number_for_existing_part", {
+          p_serial_no: Number(compatibilityPartSerial),
+          p_vehicle_model: compatibilityForm.vehicleModel,
+          p_suffix: compatibilityForm.suffix.trim() || null
+        });
+        if (error) throw error;
+        const created = Array.isArray(result) ? result[0] : result;
+        if (!created) throw new Error("The database did not return the vehicle part number.");
+        setPartNumbers((current) => [...current, { ...created, active: true }]);
+      } else {
+        const vehicle = vehicleMaster.find((item) => item.vehicle_model === compatibilityForm.vehicleModel);
+        if (!vehicle) throw new Error("Select a valid vehicle model.");
+        const core = `${vehicle.prefix}${part.part_code}${String(part.serial_no).padStart(3, "0")}`;
+        const suffix = compatibilityForm.suffix.trim().toUpperCase();
+        const sku = suffix ? `${core}-${suffix}` : core;
+        if (partNumbers.some((item) => item.full_sku === sku)) throw new Error("This part number already exists.");
+        setPartNumbers((current) => [...current, { serial_no: part.serial_no, vehicle_model: vehicle.vehicle_model, part_number: core, full_sku: sku, suffix: suffix || null, active: true }]);
+      }
+      setModal(null);
+      setCompatibilityPartSerial(null);
+      setCompatibilityForm({ vehicleModel: "", suffix: "" });
+    } catch (error) {
+      setPartError(error.message || "Could not add this vehicle part number.");
     }
   };
 
@@ -1118,7 +1153,7 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
           {page === "prices-needed" && <PricesNeeded batches={pricesNeeded} onPrice={openPriceBatch} canManage={canManageHQ} />}
           {page === "receipts" && <Receipts receipts={data.receipts} />}
           {page === "jobs" && canOperateLocation && <Jobs jobs={visibleJobs} onNew={() => { setJob((current) => ({ ...current, location: allowedLocations[0], lines: [] })); setModal("job"); }} canOperate={canOperateLocation} />}
-          {page === "parts" && <PartsCatalogue parts={partMaster} partNumbers={partNumbers} vehicles={vehicleMaster} search={partSearch} setSearch={setPartSearch} error={partError} canManage={canManageHQ} onNew={() => { setPartError(""); setPartForm({ name: "", category: "Body & Frame", notes: "", vehicleModel: "", suffix: "" }); setModal("new-part"); }} />}
+          {page === "parts" && <PartsCatalogue parts={partMaster} partNumbers={partNumbers} vehicles={vehicleMaster} search={partSearch} setSearch={setPartSearch} error={partError} canManage={canManageHQ} onNew={() => { setPartError(""); setPartForm({ name: "", category: "Body & Frame", notes: "", vehicleModel: "", suffix: "" }); setModal("new-part"); }} onAddModel={(part) => { setPartError(""); setCompatibilityPartSerial(part.serial_no); setCompatibilityForm({ vehicleModel: "", suffix: "" }); setModal("add-part-model"); }} />}
           {page === "reports" && <Reports jobs={visibleJobs} totals={totals} />}
           {page === "audit" && <Audit entries={data.audit} />}
             </>}
@@ -1126,6 +1161,18 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
       </div>
 
       {workspaceError && <div className="workspace-error" role="alert">{workspaceError}</div>}
+      {modal === "add-part-model" && <Modal title="Add vehicle compatibility" onClose={() => setModal(null)}>
+        <form onSubmit={addPartModel}>
+          {(() => { const part = partMaster.find((item) => Number(item.serial_no) === Number(compatibilityPartSerial)); return part ? <div className="notice">Adding another vehicle number for <b>{part.part_name}</b> ({part.part_code}{String(part.serial_no).padStart(3, "0")}). The part master code and serial will not change.</div> : null; })()}
+          <div className="form-grid">
+            <Field label="Vehicle model"><select required value={compatibilityForm.vehicleModel} onChange={(e) => setCompatibilityForm((current) => ({ ...current, vehicleModel: e.target.value }))}><option value="">Select vehicle model</option>{vehicleMaster.filter((vehicle) => !partNumbers.some((number) => Number(number.serial_no) === Number(compatibilityPartSerial) && number.vehicle_model === vehicle.vehicle_model && !number.suffix)).map((vehicle) => <option key={vehicle.vehicle_model} value={vehicle.vehicle_model}>{vehicle.vehicle_model} · {vehicle.prefix}</option>)}</select></Field>
+            <Field label="Optional suffix (e.g. OEM)"><input maxLength="12" value={compatibilityForm.suffix} onChange={(e) => setCompatibilityForm((current) => ({ ...current, suffix: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, "") }))} placeholder="Leave blank for standard part number" /></Field>
+          </div>
+          {compatibilityPartSerial && compatibilityForm.vehicleModel && <div className="notice">Preview: {vehicleMaster.find((vehicle) => vehicle.vehicle_model === compatibilityForm.vehicleModel)?.prefix}{partMaster.find((part) => Number(part.serial_no) === Number(compatibilityPartSerial))?.part_code}{String(compatibilityPartSerial).padStart(3, "0")}{compatibilityForm.suffix ? `-${compatibilityForm.suffix}` : ""}</div>}
+          {partError && <div className="notice auth-error" role="alert">{partError}</div>}
+          <div className="form-actions"><button type="button" onClick={() => setModal(null)}>Cancel</button><button className="primary">Add vehicle number</button></div>
+        </form>
+      </Modal>}
       {modal === "new-part" && <Modal title="Register new part" onClose={() => setModal(null)}>
         <form onSubmit={createPart}>
           <div className="notice">Registration creates a catalogue record only. It does not add stock, a purchase order or a receipt. Part serials are permanent.</div>
@@ -1274,7 +1321,7 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
   );
 }
 
-function PartsCatalogue({ parts, partNumbers, vehicles, search, setSearch, error, canManage, onNew }) {
+function PartsCatalogue({ parts, partNumbers, vehicles, search, setSearch, error, canManage, onNew, onAddModel }) {
   const query = search.trim().toLowerCase();
   const filtered = parts.filter((part) => `${part.serial_no} ${part.part_code} ${part.part_name} ${part.category}`.toLowerCase().includes(query));
   const numbersFor = (serial) => partNumbers.filter((number) => Number(number.serial_no) === Number(serial));
@@ -1283,7 +1330,7 @@ function PartsCatalogue({ parts, partNumbers, vehicles, search, setSearch, error
     <div className="notice">The master catalogue is separate from stock. A part can be registered before it has ever been purchased. Serial numbers are permanent and never reused.</div>
     {error && <div className="notice auth-error" role="alert">{error}</div>}
     <div className="panel"><div className="form-grid"><Field label="Search parts"><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Part name, code, serial or category" /></Field><div className="metric"><span className="muted">Registered parts</span><strong>{parts.length}</strong></div><div className="metric"><span className="muted">Vehicle models</span><strong>{vehicles.length}</strong></div></div>
-      <div className="table-wrap"><table><thead><tr><th>Serial</th><th>Part code</th><th>Part name</th><th>Category</th><th>Vehicle part numbers</th><th>Status</th></tr></thead><tbody>{filtered.map((part) => <tr key={part.serial_no}><td>{String(part.serial_no).padStart(3, "0")}</td><td><strong>{part.part_code}</strong><div className="muted">{part.part_code}{String(part.serial_no).padStart(3, "0")}</div></td><td>{part.part_name}{part.notes && <div className="muted">{part.notes}</div>}</td><td>{part.category}</td><td>{numbersFor(part.serial_no).length ? numbersFor(part.serial_no).map((number) => <div key={number.id || number.full_sku}>{number.vehicle_model || vehicles.find((vehicle) => vehicle.prefix === String(number.full_sku).slice(0, 6))?.vehicle_model || "Vehicle"}: {number.full_sku}</div>) : <span className="muted">Not assigned to a vehicle</span>}</td><td><span className={`tag ${part.active === false ? "red" : "green"}`}>{part.active === false ? "INACTIVE" : "ACTIVE"}</span></td></tr>)}{!filtered.length && <tr><td colSpan="6" className="muted">{parts.length ? "No parts match your search." : "No master parts are loaded yet."}</td></tr>}</tbody></table></div>
+      <div className="table-wrap"><table><thead><tr><th>Serial</th><th>Part code</th><th>Part name</th><th>Category</th><th>Vehicle part numbers</th><th>Status</th><th>Action</th></tr></thead><tbody>{filtered.map((part) => <tr key={part.serial_no}><td>{String(part.serial_no).padStart(3, "0")}</td><td><strong>{part.part_code}</strong><div className="muted">{part.part_code}{String(part.serial_no).padStart(3, "0")}</div></td><td>{part.part_name}{part.notes && <div className="muted">{part.notes}</div>}</td><td>{part.category}</td><td>{numbersFor(part.serial_no).length ? numbersFor(part.serial_no).map((number) => <div key={number.id || number.full_sku}>{number.vehicle_model || vehicles.find((vehicle) => vehicle.prefix === String(number.full_sku).slice(0, 6))?.vehicle_model || "Vehicle"}: {number.full_sku}</div>) : <span className="muted">Not assigned to a vehicle</span>}</td><td><span className={`tag ${part.active === false ? "red" : "green"}`}>{part.active === false ? "INACTIVE" : "ACTIVE"}</span></td><td>{canManage && <button type="button" onClick={() => onAddModel(part)}>＋ Vehicle model</button>}</td></tr>)}{!filtered.length && <tr><td colSpan="7" className="muted">{parts.length ? "No parts match your search." : "No master parts are loaded yet."}</td></tr>}</tbody></table></div>
     </div>
   </>;
 }
