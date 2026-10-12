@@ -1146,7 +1146,7 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
           {!workspaceReady
             ? <div className="panel">Loading {activeLocation === "All locations" ? "all location workspaces" : `${activeLocation} workspace`}…</div>
             : <>
-          {page === "dashboard" && <Dashboard data={data} stock={visibleStock} jobs={visibleJobs} receipts={data.receipts} totals={totals} />}
+          {page === "dashboard" && <Dashboard data={data} stock={visibleStock} jobs={visibleJobs} receipts={visibleReceipts} totals={totals} locations={allowedLocations} purchaseOrders={visiblePurchaseOrders} pricesNeeded={pricesNeeded} activeLocation={activeLocation} />}
           {page === "inventory" && <Inventory stock={visibleStock} search={search} setSearch={setSearch} filterLocation={filterLocation} setFilterLocation={setFilterLocation} locations={allowedLocations} purchaseOrders={data.purchaseOrders || []} onPurchaseOrder={openPurchaseOrder} canManage={canManageHQ} />}
           {page === "purchase-orders" && canReceiveStock && <PurchaseOrders purchaseOrders={visiblePurchaseOrders} onNew={openPurchaseOrder} onReceive={openReceiveDelivery} canManage={canManageHQ} />}
           {page === "inbound" && canReceiveStock && <Inbound batches={inboundBatches} />}
@@ -1339,22 +1339,128 @@ function PartsCatalogue({ parts, partNumbers, vehicles, search, setSearch, error
 function Field({ label, children }) { return <label>{label}{children}</label>; }
 
 function Modal({ title, onClose, children }) {
-  return <div className="modal-backdrop"><div className="modal-card"><div className="modal-head"><h3>{title}</h3><button onClick={onClose}>Close</button></div>{children}</div></div>;
-}
-
-function Dashboard({ stock, jobs, receipts, totals, data }) {
-  const low = stock.filter((x) => x.qty <= x.reorder).length;
-  return <><div className="page-head"><h2>Dashboard</h2><span className="muted">Live operational overview</span></div>
-    <div className="metrics">
-      <Metric label="Stock lines" value={stock.length}/><Metric label="Low-stock items" value={low}/>
-      <Metric label="Job cards" value={jobs.length}/><Metric label="Captain-paid" value={money(totals.paid)}/>
-      <Metric label="Complimentary" value={money(totals.free)}/><Metric label="Stock value" value={money(stock.reduce((a,x)=>a+x.stockValue,0))}/>
-      <Metric label="Open jobs" value={jobs.filter((x)=>x.status!=="Closed"&&x.status!=="Cancelled").length}/><Metric label="Receipts" value={receipts.length}/>
-    </div>
-    <div className="panel"><h3>Recent activity</h3>{data.audit.slice(-8).reverse().map((x,i)=><div className="activity" key={i}>{x}</div>)}</div>
+  return <div className="modal-backdrop"><div className=function Dashboard({ stock, jobs, receipts, totals, data, locations, purchaseOrders, pricesNeeded, activeLocation }) {
+  const now = new Date();
+  const since = (days) => new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+  const inWindow = (value, days) => {
+    if (!value) return false;
+    const date = new Date(value);
+    return !Number.isNaN(date.getTime()) && date >= since(days) && date <= now;
+  };
+  const fmt = (value) => Number(value || 0).toLocaleString("en-NG", { maximumFractionDigits: 1 });
+  const distinctParts = (rows) => new Set(rows.filter((item) => Number(item.qty) > 0).map((item) => item.ref)).size;
+  const units = stock.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+  const stockValue = stock.reduce((sum, item) => sum + Number(item.stockValue || 0), 0);
+  const reorderItems = stock.filter((item) => Number(item.reorder) > 0 && Number(item.qty || 0) <= Number(item.reorder));
+  const noReorder = stock.filter((item) => !(Number(item.reorder) > 0));
+  const recentIssues = (data.movements || []).filter((item) =>
+    item.type === "Issue" && locations.includes(item.location) && inWindow(item.date, 7)
+  );
+  const issuedUnits = recentIssues.reduce((sum, item) => sum + Number(item.qty || 0), 0);
+  const grossProfit30 = jobs.filter((job) => inWindow(job.date, 30)).reduce((sum, job) =>
+    sum + (job.lines || []).reduce((lineSum, line) => {
+      if (line.unitCost == null || line.price == null) return lineSum;
+      return lineSum + (Number(line.price) - Number(line.unitCost)) * Number(line.qty || 0);
+    }, 0), 0);
+  const openPOs = (purchaseOrders || []).filter((po) => (po.lines || []).some((line) => Number(line.qtyOrdered || 0) > Number(line.qtyReceived || 0)));
+  const belowCost = jobs.reduce((count, job) => count + (job.lines || []).filter((line) =>
+    line.unitCost != null && line.price != null && Number(line.price) < Number(line.unitCost)
+  ).length, 0);
+  const locationRows = locations.map((location) => {
+    const rows = stock.filter((item) => item.location === location);
+    const locationIssues = recentIssues.filter((item) => item.location === location);
+    const locationJobs = jobs.filter((job) => job.location === location && inWindow(job.date, 30));
+    const locationPOs = (purchaseOrders || []).filter((po) => po.location === location && (po.lines || []).some((line) => Number(line.qtyOrdered || 0) > Number(line.qtyReceived || 0)));
+    const locationProfit = locationJobs.reduce((sum, job) => sum + (job.lines || []).reduce((acc, line) =>
+      line.unitCost == null || line.price == null ? acc : acc + (Number(line.price) - Number(line.unitCost)) * Number(line.qty || 0), 0), 0);
+    return {
+      location,
+      parts: distinctParts(rows),
+      units: rows.reduce((sum, item) => sum + Number(item.qty || 0), 0),
+      value: rows.reduce((sum, item) => sum + Number(item.stockValue || 0), 0),
+      reorder: rows.filter((item) => Number(item.reorder) > 0 && Number(item.qty || 0) <= Number(item.reorder)).length,
+      noReorder: rows.filter((item) => !(Number(item.reorder) > 0)).length,
+      issues: locationIssues.length,
+      issuedUnits: locationIssues.reduce((sum, item) => sum + Number(item.qty || 0), 0),
+      profit: locationProfit,
+      pricesNeeded: (pricesNeeded || []).filter((item) => item.location === location).length,
+      openPOs: locationPOs.length
+    };
+  });
+  const alertRows = reorderItems
+    .map((item) => ({
+      ...item,
+      shortfall: Math.max(0, Number(item.reorder || 0) - Number(item.qty || 0)),
+      elsewhere: stock.filter((other) => other.ref === item.ref && other.location !== item.location && Number(other.qty) > 0)
+        .map((other) => `${other.location} ${fmt(other.qty)}`).join(", ")
+    }))
+    .sort((a, b) => b.shortfall - a.shortfall)
+    .slice(0, 8);
+  const totalRow = locationRows.length > 1 ? [{
+    location: "TOTAL",
+    parts: distinctParts(stock),
+    units,
+    value: stockValue,
+    reorder: reorderItems.length,
+    noReorder: noReorder.length,
+    issues: recentIssues.length,
+    issuedUnits,
+    profit: grossProfit30,
+    pricesNeeded: (pricesNeeded || []).length,
+    openPOs: openPOs.length
+  }] : [];
+  const locationsLabel = activeLocation === "All locations" ? "All locations" : activeLocation;
+  const metric = (label, value, hint = "") => <div className="metric hq-metric" key={label}><span className="muted">{label}</span><strong>{value}</strong>{hint && <small>{hint}</small>}</div>;
+  return <>
+    <div className="page-head"><div><h2>MechPad Inventory – HQ Dashboard</h2><span className="muted">Consolidated stock, purchasing and workshop control · {locationsLabel}</span></div><span className="muted">Refreshed {now.toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span></div>
+    <section className="hq-dashboard-section">
+      <div className="hq-metrics">
+        {metric("Units in stock", fmt(units))}
+        {metric("Stock value at cost", money(stockValue))}
+        {metric("Parts in stock", fmt(distinctParts(stock)))}
+        {metric("Gross profit · 30 days", money(grossProfit30), "Only job lines with recorded unit cost")}
+        {metric("Reorder alerts", fmt(reorderItems.length))}
+        {metric("Prices needed", fmt((pricesNeeded || []).length))}
+      </div>
+      <div className="hq-metrics">
+        {metric("Open POs", fmt(openPOs.length))}
+        {metric("Short deliveries · 30 days", "—", "Delivery due-date tracking not yet available")}
+        {metric("Issues · 7 days", fmt(recentIssues.length))}
+        {metric("Unpaid · pay required", "—", "Payment reconciliation not yet connected")}
+        {metric("Finance pending", "—", "Finance reconciliation not yet connected")}
+        {metric("Net variance", "—", "Stock-count reconciliation not yet connected")}
+      </div>
+      <div className="hq-metrics">
+        {metric("Investigate", "—", "Investigation workflow not yet available")}
+        {metric("Transfers out · open", "—", "Inter-location transfers not yet available")}
+        {metric("Overdue transfers", "—", "Inter-location transfers not yet available")}
+        {metric("Sales below cost", fmt(belowCost))}
+        {metric("Field kits out", "—", "Field-kit tracking not yet available")}
+        {metric("Field kits overdue", "—", "Field-kit tracking not yet available")}
+      </div>
+      <div className="hq-metrics hq-single-metric">
+        {metric("Kit shortages owed", "—", "Field-kit reconciliation not yet available")}
+      </div>
+    </section>
+    <section className="panel hq-section">
+      <div className="section-head"><h3>By location</h3><span className="muted">Location totals follow the selected workspace filter</span></div>
+      <div className="table-wrap"><table className="hq-table"><thead><tr>
+        <th>City</th><th>Parts in stock</th><th>Units in stock</th><th>Stock value at cost</th><th>Reorder alerts</th><th>Investigate</th><th>No reorder level set</th><th>Short deliveries · 30d</th><th>Issues · 7d</th><th>Units issued · 7d</th><th>Unpaid · pay required</th><th>Finance pending</th><th>Net variance</th><th>Transfers out · open</th><th>Gross profit · 30d</th><th>Prices needed</th><th>Open POs</th>
+      </tr></thead><tbody>
+        {locationRows.map((row) => <tr key={row.location}><td>{row.location}</td><td>{fmt(row.parts)}</td><td>{fmt(row.units)}</td><td>{money(row.value)}</td><td>{fmt(row.reorder)}</td><td>—</td><td>{fmt(row.noReorder)}</td><td>—</td><td>{fmt(row.issues)}</td><td>{fmt(row.issuedUnits)}</td><td>—</td><td>—</td><td>—</td><td>—</td><td>{money(row.profit)}</td><td>{fmt(row.pricesNeeded)}</td><td>{fmt(row.openPOs)}</td></tr>)}
+        {totalRow.map((row) => <tr className="hq-total-row" key={row.location}><td>{row.location}</td><td>{fmt(row.parts)}</td><td>{fmt(row.units)}</td><td>{money(row.value)}</td><td>{fmt(row.reorder)}</td><td>—</td><td>{fmt(row.noReorder)}</td><td>—</td><td>{fmt(row.issues)}</td><td>{fmt(row.issuedUnits)}</td><td>—</td><td>—</td><td>—</td><td>—</td><td>{money(row.profit)}</td><td>{fmt(row.pricesNeeded)}</td><td>{fmt(row.openPOs)}</td></tr>)}
+      </tbody></table></div>
+    </section>
+    <section className="panel hq-section">
+      <div className="section-head"><h3>Top reorder alerts</h3><span className="muted">Items with stock at or below their reorder level</span></div>
+      {alertRows.length ? <div className="table-wrap"><table><thead><tr><th>Location</th><th>Item code</th><th>Item name</th><th>Current</th><th>Reorder level</th><th>Shortfall</th><th>Available elsewhere</th></tr></thead><tbody>
+        {alertRows.map((item) => <tr key={`${item.location}-${item.ref}`}><td>{item.location}</td><td>{item.ref}</td><td>{item.name}</td><td>{fmt(item.qty)}</td><td>{fmt(item.reorder)}</td><td>{fmt(item.shortfall)}</td><td>{item.elsewhere || "None recorded"}</td></tr>)}
+      </tbody></table></div> : <p className="muted">No reorder alerts for the selected location scope.</p>}
+    </section>
+    <section className="panel hq-section"><h3>Recent activity</h3>{(data.audit || []).slice(-8).reverse().map((entry, index) => <div className="activity" key={index}>{entry}</div>)}{!(data.audit || []).length && <p className="muted">No activity recorded yet.</p>}</section>
   </>;
 }
-function Metric({ label, value }) { return <div className="metric"><span className="muted">{label}</span><strong>{value}</strong></div>; }
+
 function Inventory({ stock, search, setSearch, filterLocation, setFilterLocation, locations, purchaseOrders, onPurchaseOrder, canManage }) {
   const onOrder = (item) => purchaseOrders
     .filter((po) => po.location === item.location)
