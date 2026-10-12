@@ -615,6 +615,29 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
     return acc;
   }, { paid: 0, free: 0 }), [visibleJobs]);
 
+  const generatedPartOptions = partNumbers.map((number) => {
+    const part = partMaster.find((item) => Number(item.serial_no) === Number(number.serial_no));
+    const vehicle = vehicleMaster.find((item) => item.vehicle_model === number.vehicle_model);
+    if (!part) return null;
+    return {
+      id: `PART-${number.serial_no}-${number.vehicle_model}`,
+      ref: number.full_sku,
+      name: part.part_name,
+      category: part.category,
+      assetType: vehicle?.vehicle_type === "3W" ? "Tricycle" : "Motorcycle",
+      assetBrand: vehicle?.brand || "",
+      assetModel: number.vehicle_model,
+      qty: 0,
+      price: 0,
+      sellingPrice: null,
+      markup: 15,
+      location: allowedLocations[0],
+      condition: "Good",
+      reorder: 2,
+      supplier: ""
+    };
+  }).filter(Boolean);
+
   const log = (message) => {
     setData((current) => ({
       ...current,
@@ -1128,7 +1151,7 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
           </div>
           <div className="section-head"><h3>Order lines</h3><button type="button" onClick={() => setPoForm((current) => ({ ...current, lines: [...current.lines, { ref: "", qtyOrdered: 1, unitCost: "" }] }))}>＋ Add line</button></div>
           {poForm.lines.map((line, index) => <div className="job-line" key={index}>
-            <Field label="Item code"><select required value={line.ref} onChange={(e) => setPoForm((current) => ({ ...current, lines: current.lines.map((entry, lineIndex) => lineIndex === index ? { ...entry, ref: e.target.value } : entry) }))}><option value="">Select an item</option>{[...new Map([...sampleStock, ...data.stock].map((item) => [item.ref, item])).values()].map((item) => <option key={item.ref} value={item.ref}>{item.ref} — {item.name}</option>)}</select></Field>
+            <Field label="Item code"><select required value={line.ref} onChange={(e) => setPoForm((current) => ({ ...current, lines: current.lines.map((entry, lineIndex) => lineIndex === index ? { ...entry, ref: e.target.value } : entry) }))}><option value="">Select an item</option>{[...new Map([...sampleStock, ...data.stock, ...generatedPartOptions].map((item) => [item.ref, item])).values()].map((item) => <option key={item.ref} value={item.ref}>{item.ref} — {item.name}</option>)}</select></Field>
             <Field label="Quantity"><input required type="number" min="1" step="1" value={line.qtyOrdered} onChange={(e) => setPoForm((current) => ({ ...current, lines: current.lines.map((entry, lineIndex) => lineIndex === index ? { ...entry, qtyOrdered: e.target.value } : entry) }))} /></Field>
             <Field label="Unit cost"><input required type="number" min="0.01" step="0.01" value={line.unitCost} onChange={(e) => setPoForm((current) => ({ ...current, lines: current.lines.map((entry, lineIndex) => lineIndex === index ? { ...entry, unitCost: e.target.value } : entry) }))} /></Field>
             {poForm.lines.length > 1 && <button type="button" onClick={() => setPoForm((current) => ({ ...current, lines: current.lines.filter((_, lineIndex) => lineIndex !== index) }))}>Remove</button>}
