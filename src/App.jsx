@@ -1339,7 +1339,10 @@ function PartsCatalogue({ parts, partNumbers, vehicles, search, setSearch, error
 function Field({ label, children }) { return <label>{label}{children}</label>; }
 
 function Modal({ title, onClose, children }) {
-  return <div className="modal-backdrop"><div className=function Dashboard({ stock, jobs, receipts, totals, data, locations, purchaseOrders, pricesNeeded, activeLocation }) {
+  return <div className="modal-backdrop"><div className="modal-card"><div className="modal-head"><h3>{title}</h3><button type="button" onClick={onClose}>Close</button></div>{children}</div></div>;
+}
+
+function Dashboard({ stock, jobs, receipts, totals, data, locations, purchaseOrders, pricesNeeded, activeLocation }) {
   const now = new Date();
   const since = (days) => new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
   const inWindow = (value, days) => {
