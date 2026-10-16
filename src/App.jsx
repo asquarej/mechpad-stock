@@ -657,8 +657,9 @@ function InventoryWorkspace({ profile, supabaseClient = null, onSignOut, demoMod
     setPartError("");
     const name = partForm.name.trim().replace(/\\s+/g, " ");
     if (!name || !partForm.category) return setPartError("Enter a part name and category.");
-    if (partMaster.some((part) => String(part.part_name || "").trim().toLowerCase() === name.toLowerCase())) {
-      return setPartError("This part name already exists. Search the catalogue before registering it.");
+    const suffix = partForm.suffix.trim().toUpperCase();
+    if (!suffix && partMaster.some((part) => String(part.part_name || "").trim().toLowerCase() === name.toLowerCase())) {
+      return setPartError("This part name already exists. Add an OEM suffix (for example, ENDURE) to register a distinct variant, or search the catalogue.");
     }
     setPartSaving(true);
     try {
